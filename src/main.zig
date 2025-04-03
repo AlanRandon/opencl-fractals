@@ -30,25 +30,43 @@ pub fn main() !void {
         unreachable;
     };
 
-    const width: c.cl_uint = 2048;
-    const height: c.cl_uint = width;
-    var results: [width * height * 3]u8 = undefined;
+    const RayTrace = @import("kernels/RayTrace.zig");
+    const args = comptime RayTrace.Args.init(1024);
+    var args_mut = args;
 
-    const out = c.clCreateBuffer(context, c.CL_MEM_WRITE_ONLY, results.len, null, &err) orelse {
+    const args_buf = c.clCreateBuffer(
+        context,
+        c.CL_MEM_READ_ONLY | c.CL_MEM_USE_HOST_PTR,
+        @sizeOf(RayTrace.Args),
+        @ptrCast(&args_mut),
+        &err,
+    ) orelse {
+        try checkClError(err);
+        unreachable;
+    };
+
+    var results: [args.image_width_int * args.image_height_int * 3]u8 = undefined;
+    const out = c.clCreateBuffer(
+        context,
+        c.CL_MEM_WRITE_ONLY | c.CL_MEM_HOST_READ_ONLY,
+        results.len,
+        null,
+        &err,
+    ) orelse {
         try checkClError(err);
         unreachable;
     };
 
     try checkClError(c.clSetKernelArg(kernel, 0, @sizeOf(c.cl_mem), @ptrCast(&out)));
-    try checkClError(c.clSetKernelArg(kernel, 1, @sizeOf(c.cl_mem), @ptrCast(&@as(u32, width))));
+    try checkClError(c.clSetKernelArg(kernel, 1, @sizeOf(c.cl_mem), @ptrCast(&args_buf)));
 
-    var sizes: [2]usize = .{ width, height };
+    var sizes: [2]usize = .{ args.image_width_int, args.image_height_int };
     try checkClError(c.clEnqueueNDRangeKernel(commands, kernel, 2, null, @constCast(&sizes), null, 0, null, null));
     try checkClError(c.clFinish(commands));
     try checkClError(c.clEnqueueReadBuffer(commands, out, c.CL_TRUE, 0, results.len, &results, 0, null, null));
 
-    const file = try std.fs.cwd().openFile("out.png", .{ .mode = .write_only });
+    const file = try std.fs.cwd().createFile("out.png", .{});
     defer file.close();
 
-    _ = c.stbi_write_png("out.png", width, height, 3, &results, 0);
+    _ = c.stbi_write_png("out.png", args.image_width_int, args.image_height_int, 3, &results, 0);
 }
