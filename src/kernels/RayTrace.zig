@@ -1,4 +1,5 @@
 const std = @import("std");
+const color = @import("color.zig");
 
 pub const Args = extern struct {
     const c = @import("../c.zig");
@@ -22,9 +23,10 @@ pub const Args = extern struct {
 
         const viewport_upper_left = camera_center -
             Direction{ 0, 0, focal_length } -
-            viewport_u * @as(Direction, @splat(0.5)) -
-            viewport_v * @as(Direction, @splat(0.5));
-        const upper_left_pixel = viewport_upper_left + (viewport_delta_u + viewport_delta_v) * @as(Direction, @splat(0.5));
+            mulVec(3, 0.5, viewport_u) -
+            mulVec(3, 0.5, viewport_v);
+
+        const upper_left_pixel = viewport_upper_left + mulVec(3, 0.5, viewport_delta_u + viewport_delta_v);
 
         return .{
             .image_width_int = width,
@@ -37,19 +39,22 @@ pub const Args = extern struct {
 };
 
 const Point = @Vector(3, f32);
-const Color = @Vector(3, f32);
 const Direction = @Vector(3, f32);
+const Color = color.Color;
 
 const camera_center: Point = .{ 0, 0, 0 };
 const focal_length: f32 = 1.0;
 
 fn unitVec(comptime size: comptime_int, vec: @Vector(size, f32)) @Vector(size, f32) {
+    return mulVec(size, 1 / magnitudeVec(size, vec), vec);
+}
+
+fn magnitudeVec(comptime size: comptime_int, vec: @Vector(size, f32)) f32 {
     var magnitude_sq: f32 = 0;
     for (@as([size]f32, vec)) |i| {
         magnitude_sq += i * i;
     }
-    const magnitude = std.math.sqrt(magnitude_sq);
-    return mulVec(size, 1 / magnitude, vec);
+    return std.math.sqrt(magnitude_sq);
 }
 
 fn mulVec(comptime size: comptime_int, parameter: f32, vec: @Vector(size, f32)) @Vector(size, f32) {
@@ -68,6 +73,10 @@ fn dot(comptime size: comptime_int, lhs: @Vector(size, f32), rhs: @Vector(size, 
     return result;
 }
 
+fn acuteAngleVec(comptime size: comptime_int, lhs: @Vector(size, f32), rhs: @Vector(size, f32)) f32 {
+    return std.math.acos(@abs(dot(size, lhs, rhs)) / magnitudeVec(size, lhs) / magnitudeVec(size, rhs));
+}
+
 const Sphere = struct {
     center: Point,
     radius: f32,
@@ -81,6 +90,10 @@ const Sphere = struct {
         if (discriminant > 0) {
             const discriminant_sqrt = std.math.sqrt(discriminant);
             const t = @min(h - discriminant_sqrt, h + discriminant_sqrt) / a;
+            if (t < 0) {
+                return false;
+            }
+
             const intersection = ray.pointAt(t);
             out.* = .{
                 .origin = intersection,
@@ -93,26 +106,29 @@ const Sphere = struct {
     }
 };
 
+const hsvToRgb = color.hsvToRgb;
 const Ray = struct {
     origin: Point,
     direction: Direction,
 
     fn color(ray: *const Ray) Color {
-        for (0..20) |j_int| {
+        for (0..100) |j_int| {
             const j: f32 = @floatFromInt(j_int);
-            for (0..20) |i_int| {
+            for (0..30) |i_int| {
                 const i: f32 = @floatFromInt(i_int);
+                const angle = i / 30.0 * std.math.pi * 2.0 + j / 20.0 * std.math.pi * 2.0;
                 const sphere = Sphere{
                     .center = .{
-                        std.math.cos(i / 20.0 * std.math.pi * 2.0) * 5,
-                        std.math.sin(i / 20.0 * std.math.pi * 2.0) * 5,
-                        j * 2,
+                        std.math.cos(angle) * 5,
+                        std.math.sin(angle) * 5,
+                        -j,
                     },
                     .radius = 0.5,
                 };
                 var reflection: Ray = undefined;
                 if (sphere.checkRay(ray, &reflection)) {
-                    return lerpVec(3, reflection.direction[2], .{ 0.5, 0, 0 }, .{ 1, 0, 0 });
+                    const reflectionAngle = acuteAngleVec(3, .{ 0, 0, 1 }, reflection.direction);
+                    return lerpVec(3, reflectionAngle / std.math.pi * 2, hsvToRgb(i / 30.0, 1 - j / 20.0, 0.7), .{ 0, 0, 0 });
                 }
             }
         }
@@ -135,8 +151,8 @@ pub fn pixel(out: [*]addrspace(.global) u8, args_ptr: *addrspace(.global) const 
     const y: f32 = @floatFromInt(y_int);
 
     const pixel_center = args.upper_left_pixel +
-        (@as(Direction, @splat(x)) * args.viewport_delta_u) +
-        (@as(Direction, @splat(y)) * args.viewport_delta_v);
+        mulVec(3, x, args.viewport_delta_u) +
+        mulVec(3, y, args.viewport_delta_v);
 
     const ray_direction = pixel_center - camera_center;
     const ray: Ray = .{ .origin = camera_center, .direction = ray_direction };
